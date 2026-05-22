@@ -99,24 +99,38 @@ You must provide either `issuer` (for discovery) or all of `endpoints.{authoriza
 
 ## Provider examples
 
+All examples assume `OIDC_REDIRECT_URI=http://localhost:1337/oidc-sso/callback` in development. Replace with your public URL in production and register the same URI verbatim with the IdP.
+
 ### Microsoft Entra ID — single tenant
 
 ```sh
 OIDC_ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0
 OIDC_CLIENT_ID=...
 OIDC_CLIENT_SECRET=...
-OIDC_REDIRECT_URI=http://localhost:1337/oidc-sso/callback
 ```
 
-In Entra → App registrations → Authentication → add a **Web** platform with the redirect URI.
+Setup:
+1. Entra admin centre → **App registrations** → New registration.
+2. **Authentication** → Add platform → **Web** → set the redirect URI.
+3. **Certificates & secrets** → New client secret → copy the value into `OIDC_CLIENT_SECRET`.
+4. **API permissions** → keep the default `User.Read` (Microsoft Graph).
 
-### Microsoft Entra ID — multi-tenant (any work/school/personal account)
+```ts
+userMapping: (claims) => ({
+  email:     claims.preferred_username ?? claims.email,
+  firstName: claims.given_name,
+  lastName:  claims.family_name,
+}),
+```
+
+### Microsoft Entra ID — multi-tenant (any work/school account)
 
 ```sh
 OIDC_ISSUER=https://login.microsoftonline.com/common/v2.0
+# or /organizations/v2.0 to exclude personal MSAs
 ```
 
-Switch the app registration to "Accounts in any organizational directory" (or with personal accounts). The plugin auto-detects the `{tenantid}` placeholder in `/common/` discovery and validates the id_token's actual `tid` against the JWKS — no extra config needed.
+Switch the app registration to "Accounts in any organizational directory". The plugin auto-detects the `{tenantid}` placeholder in `/common/` discovery and validates the id_token's actual `tid` against the JWKS — no extra config needed. Combine with `allowedDomains` to restrict which tenants can sign in.
 
 ### Google
 
@@ -124,21 +138,152 @@ Switch the app registration to "Accounts in any organizational directory" (or wi
 OIDC_ISSUER=https://accounts.google.com
 OIDC_CLIENT_ID=...apps.googleusercontent.com
 OIDC_CLIENT_SECRET=...
+OIDC_SCOPES=openid,profile,email
 ```
 
-In Google Cloud Console → Credentials → OAuth 2.0 Client ID → add the redirect URI.
+Setup:
+1. Google Cloud Console → **APIs & Services → OAuth consent screen** → configure (Internal if you use Workspace).
+2. **Credentials** → **Create credentials** → OAuth 2.0 Client ID → Web application.
+3. Add the redirect URI under **Authorized redirect URIs**.
 
-### Keycloak
+Restrict to a single Google Workspace domain via the `hd` claim:
+
+```ts
+userMapping: (claims) => {
+  if (claims.hd !== 'example.com') throw new Error('Not a company account');
+  return {
+    email:     claims.email,
+    firstName: claims.given_name,
+    lastName:  claims.family_name,
+  };
+},
+```
+
+### Okta
 
 ```sh
-OIDC_ISSUER=https://keycloak.example.com/realms/<realm>
+OIDC_ISSUER=https://<your-org>.okta.com/oauth2/default
+# or a custom auth server: https://<your-org>.okta.com/oauth2/<auth-server-id>
+OIDC_CLIENT_ID=...
+OIDC_CLIENT_SECRET=...
+```
+
+Setup:
+1. Okta admin → **Applications** → Create App Integration → **OIDC – Web Application**.
+2. Sign-in redirect URIs → add the callback URL.
+3. Assign users / groups under **Assignments**.
+
+Pass Okta groups through if you include the `groups` scope and configure a groups claim on the auth server:
+
+```ts
+scopes: ['openid', 'profile', 'email', 'groups'],
+userMapping: (claims) => ({
+  email:     claims.email,
+  firstName: claims.given_name,
+  lastName:  claims.family_name,
+  groups:    claims.groups as string[] | undefined,
+}),
 ```
 
 ### Auth0
 
 ```sh
-OIDC_ISSUER=https://<tenant>.auth0.com/
+OIDC_ISSUER=https://<tenant>.auth0.com/   # trailing slash matters
+OIDC_CLIENT_ID=...
+OIDC_CLIENT_SECRET=...
 ```
+
+Setup:
+1. Auth0 dashboard → **Applications** → Create Application → **Regular Web Application**.
+2. **Settings** → set **Allowed Callback URLs** to the redirect URI.
+3. (Optional) add a custom claim via an [Action](https://auth0.com/docs/customize/actions) to forward roles/groups — Auth0 strips non-OIDC claim names, so namespace them:
+
+```js
+// Auth0 Action — Login / Post Login
+exports.onExecutePostLogin = async (event, api) => {
+  api.idToken.setCustomClaim('https://strapi/roles', event.authorization?.roles ?? []);
+};
+```
+
+```ts
+userMapping: (claims) => ({
+  email:     claims.email,
+  firstName: claims.given_name,
+  lastName:  claims.family_name,
+  groups:    claims['https://strapi/roles'] as string[] | undefined,
+}),
+```
+
+### AWS Cognito
+
+```sh
+OIDC_ISSUER=https://cognito-idp.<region>.amazonaws.com/<user-pool-id>
+OIDC_CLIENT_ID=...
+OIDC_CLIENT_SECRET=...
+```
+
+Setup:
+1. Cognito → User pools → your pool → **App integration** → create an **App client** (with secret).
+2. Configure a **Hosted UI domain** and add the callback URL under **Allowed callback URLs**.
+3. Enable identity providers (Cognito User Pool, Google, SAML, etc.) on the app client.
+
+Cognito puts emails in `email` and the username in `cognito:username`:
+
+```ts
+userMapping: (claims) => ({
+  email:     claims.email,
+  username:  claims['cognito:username'],
+  firstName: claims.given_name,
+  lastName:  claims.family_name,
+  groups:    claims['cognito:groups'] as string[] | undefined,
+}),
+```
+
+### Keycloak
+
+```sh
+OIDC_ISSUER=https://keycloak.example.com/realms/<realm>
+OIDC_CLIENT_ID=...
+OIDC_CLIENT_SECRET=...
+```
+
+Setup:
+1. Keycloak admin → realm → **Clients** → Create client → OpenID Connect, **Client authentication** ON.
+2. Valid redirect URIs → add the callback URL.
+3. **Credentials** tab → copy the client secret.
+
+Forward realm/client roles via the built-in `roles` scope:
+
+```ts
+scopes: ['openid', 'profile', 'email', 'roles'],
+userMapping: (claims) => ({
+  email:     claims.email,
+  firstName: claims.given_name,
+  lastName:  claims.family_name,
+  groups:    (claims.realm_access as { roles?: string[] } | undefined)?.roles,
+}),
+```
+
+### Authentik
+
+```sh
+OIDC_ISSUER=https://authentik.example.com/application/o/<slug>/
+OIDC_CLIENT_ID=...
+OIDC_CLIENT_SECRET=...
+```
+
+Create an OAuth2/OpenID provider, then an application that points at it. The issuer ends with the application slug and a trailing slash.
+
+### GitHub
+
+GitHub OAuth apps **do not implement OpenID Connect** — they don't issue an `id_token`, so this plugin can't talk to GitHub directly. Bridge GitHub through an OIDC-capable IdP:
+
+- **Auth0** — add GitHub as a social connection, then point the plugin at your Auth0 tenant (see above).
+- **Keycloak** — add a GitHub **Identity provider** under your realm, then point the plugin at the realm.
+- **Authentik** — add a GitHub **Source**, then expose it through an OAuth2/OpenID provider.
+- **AWS Cognito** — federate GitHub via a custom OIDC/SAML identity provider on the user pool.
+
+The plugin sees the bridge IdP; the bridge handles the GitHub OAuth dance and re-issues a proper OIDC `id_token` carrying the GitHub claims.
 
 ## How it works
 
