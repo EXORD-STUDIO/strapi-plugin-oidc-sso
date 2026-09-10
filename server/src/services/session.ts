@@ -3,6 +3,7 @@ import generator from 'generate-password';
 import type { Context } from 'koa';
 import type { Core } from '@strapi/strapi';
 import type { PluginConfig, ResolvedProfile } from '../types';
+import { getAdminBasePath } from '../utils/admin-path';
 
 const REFRESH_COOKIE_NAME = 'strapi_admin_refresh';
 
@@ -105,7 +106,11 @@ const generateAccessToken = async (
     httpOnly: true,
     sameSite: 'lax',
     secure: ctx.secure,
-    path: '/admin',
+    // Cookie paths are matched by the browser against the URL it requested, so
+    // this has to carry the reverse-proxy prefix; scoping it to a bare /admin
+    // behind a proxy means the cookie is never sent back and the session
+    // cannot be refreshed.
+    path: getAdminBasePath(strapi),
     overwrite: true,
   });
 

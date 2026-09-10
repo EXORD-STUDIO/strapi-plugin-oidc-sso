@@ -1,10 +1,27 @@
 import { PLUGIN_ID } from './pluginId';
 
-const LOGIN_PATH_PATTERN = /^\/admin\/auth\/login\/?$/;
+// Deliberately not anchored at the start: a reverse proxy may serve Strapi under
+// a path prefix, making the admin login page /<prefix>/admin/auth/login.
+const LOGIN_PATH_PATTERN = /\/admin\/auth\/login\/?$/;
 const BUTTON_DATA_ATTR = 'data-oidc-sso-button';
 const ALERT_DATA_ATTR = 'data-oidc-sso-alert';
-const SSO_LOGIN_URL = '/oidc-sso/login';
-const UI_CONFIG_URL = '/oidc-sso/ui-config';
+const SSO_LOGIN_PATH = '/oidc-sso/login';
+const UI_CONFIG_PATH = '/oidc-sso/ui-config';
+
+/**
+ * Path prefix Strapi is served under, read back from the admin URL currently in
+ * the address bar. When nginx exposes Strapi at /strapi and strips that prefix
+ * before proxying, the server never sees it — but the browser still has to send
+ * it, so plugin routes must be requested as /strapi/oidc-sso/... Returns '' for
+ * a root-mounted Strapi.
+ */
+const getPathPrefix = (): string => {
+  const match = window.location.pathname.match(/^(.*?)\/admin(?:\/|$)/);
+  return match ? match[1] : '';
+};
+
+const ssoLoginUrl = (): string => `${getPathPrefix()}${SSO_LOGIN_PATH}`;
+const uiConfigUrl = (): string => `${getPathPrefix()}${UI_CONFIG_PATH}`;
 const ERROR_QUERY_KEY = 'oidc_error';
 
 type ButtonStyle = {
@@ -83,7 +100,7 @@ const fetchUiConfig = async (): Promise<UiConfig> => {
   if (uiConfigPromise) return uiConfigPromise;
   uiConfigPromise = (async () => {
     try {
-      const res = await fetch(UI_CONFIG_URL, { credentials: 'omit' });
+      const res = await fetch(uiConfigUrl(), { credentials: 'omit' });
       if (!res.ok) throw new Error(`status ${res.status}`);
       const json = (await res.json()) as Partial<UiConfig>;
       const merged: UiConfig = {
@@ -222,7 +239,7 @@ const renderIcon = (icon: string | null): HTMLSpanElement | null => {
 
 const renderButton = (cfg: UiConfig): HTMLAnchorElement => {
   const a = document.createElement('a');
-  a.href = SSO_LOGIN_URL;
+  a.href = ssoLoginUrl();
   a.setAttribute(BUTTON_DATA_ATTR, '');
   a.setAttribute('data-testid', 'oidc-sso-login');
 

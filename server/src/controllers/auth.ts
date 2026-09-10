@@ -2,10 +2,13 @@ import { randomBytes } from 'node:crypto';
 import type { Context } from 'koa';
 import type { Core } from '@strapi/strapi';
 import type { Claims, PluginConfig } from '../types';
+import { getAdminBasePath, getAdminLoginPath } from '../utils/admin-path';
 
-const ADMIN_LOGIN_PATH = '/admin/auth/login';
-
-const renderHandoffHtml = (jwt: string, nonce: string): string => `<!doctype html>
+const renderHandoffHtml = (
+  jwt: string,
+  nonce: string,
+  adminBasePath: string
+): string => `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -22,20 +25,22 @@ const renderHandoffHtml = (jwt: string, nonce: string): string => `<!doctype htm
         try { window.localStorage.setItem('isLoggedIn', 'true'); } catch (_) {}
         try { window.sessionStorage.setItem('jwtToken', JSON.stringify(jwt)); } catch (_) {}
         document.cookie = 'jwtToken=' + encodeURIComponent(jwt) + '; path=/; SameSite=Lax' + (location.protocol === 'https:' ? '; Secure' : '');
-        window.location.replace('/admin');
+        window.location.replace(${JSON.stringify(adminBasePath)});
       } catch (e) {
-        window.location.replace('/admin/auth/login?error=oidc');
+        window.location.replace(${JSON.stringify(`${adminBasePath}/auth/login?error=oidc`)});
       }
     })();
   </script>
 </body>
 </html>`;
 
-const sendError = (ctx: Context, code: string) => {
-  ctx.redirect(`${ADMIN_LOGIN_PATH}?oidc_error=${encodeURIComponent(code)}`);
+const sendError = (strapi: Core.Strapi, ctx: Context, code: string) => {
+  ctx.redirect(
+    `${getAdminLoginPath(strapi)}?oidc_error=${encodeURIComponent(code)}`
+  );
 };
 
-const sendHandoff = (ctx: Context, jwt: string) => {
+const sendHandoff = (strapi: Core.Strapi, ctx: Context, jwt: string) => {
   const nonce = randomBytes(16).toString('base64');
   ctx.status = 200;
   ctx.type = 'text/html; charset=utf-8';
@@ -44,7 +49,7 @@ const sendHandoff = (ctx: Context, jwt: string) => {
     'Content-Security-Policy',
     `default-src 'self'; script-src 'self' 'nonce-${nonce}'; base-uri 'self'; frame-ancestors 'none'`
   );
-  ctx.body = renderHandoffHtml(jwt, nonce);
+  ctx.body = renderHandoffHtml(jwt, nonce, getAdminBasePath(strapi));
 };
 
 const getCode = (err: unknown): string =>
@@ -89,7 +94,7 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
       ctx.redirect(url);
     } catch (err) {
       strapi.log.error(`[oidc-sso] /login failed: ${(err as Error).message}`);
-      sendError(ctx, 'IDP_UNREACHABLE');
+      sendError(strapi, ctx, 'IDP_UNREACHABLE');
     }
   },
 
@@ -135,7 +140,7 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
 
     const flow = await stateCookie.consume(ctx);
     if (!flow) {
-      sendError(ctx, 'INVALID_OIDC_FLOW');
+      sendError(strapi, ctx, 'INVALID_OIDC_FLOW');
       return;
     }
 
@@ -163,7 +168,7 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
       strapi.log.warn(
         `[oidc-sso] token exchange failed: ${(err as Error).message}`
       );
-      sendError(ctx, 'INVALID_OIDC_FLOW');
+      sendError(strapi, ctx, 'INVALID_OIDC_FLOW');
       return;
     }
 
@@ -174,7 +179,7 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
       const code =
         getCode(err) === 'DOMAIN_NOT_ALLOWED' ? 'DOMAIN_NOT_ALLOWED' : 'MAPPING_REJECTED';
       strapi.log.warn(`[oidc-sso] user-mapping rejected: ${(err as Error).message}`);
-      sendError(ctx, code);
+      sendError(strapi, ctx, code);
       return;
     }
 
@@ -185,6 +190,7 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
       const code = getCode(err);
       strapi.log.warn(`[oidc-sso] session refused: ${(err as Error).message}`);
       sendError(
+        strapi,
         ctx,
         [
           'USER_NOT_PROVISIONED',
@@ -199,6 +205,6 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
       return;
     }
 
-    sendHandoff(ctx, jwt);
+    sendHandoff(strapi, ctx, jwt);
   },
 });

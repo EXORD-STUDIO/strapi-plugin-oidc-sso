@@ -97,6 +97,33 @@ export default ({ env }) => ({
 
 You must provide either `issuer` (for discovery) or all of `endpoints.{authorization, token, jwks}`.
 
+## Running behind a reverse proxy
+
+If a proxy serves Strapi under a path prefix — nginx exposing it at `/strapi` and
+stripping the prefix before proxying, say — set `PUBLIC_URL` (i.e. `server.url`)
+to the public URL *including* that prefix:
+
+```sh
+PUBLIC_URL=https://example.com/strapi
+```
+
+The plugin derives every browser-facing path from Strapi's own `admin.absoluteUrl`,
+which Strapi computes from `server.url`. With `PUBLIC_URL` set correctly you get:
+
+| | Value |
+|---|---|
+| Redirect URI to register with the IdP | `https://example.com/strapi/oidc-sso/callback` |
+| Post-login landing | `https://example.com/strapi/admin` |
+| Error banner target | `https://example.com/strapi/admin/auth/login` |
+| Refresh-cookie path | `/strapi/admin` |
+
+The admin-side button resolves the prefix from the URL in the address bar, so it
+requests `/strapi/oidc-sso/login` rather than `/oidc-sso/login`.
+
+If `PUBLIC_URL` omits the prefix, the prefix is invisible to Strapi and sign-in
+completes but lands the browser on `/admin`, which the proxy will route to
+whatever else sits at the site root.
+
 ## Provider examples
 
 All examples assume `OIDC_REDIRECT_URI=http://localhost:1337/oidc-sso/callback` in development. Replace with your public URL in production and register the same URI verbatim with the IdP.
